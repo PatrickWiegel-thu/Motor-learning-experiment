@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Track-Experiment</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui, sans-serif; background: #111; color: #eee; padding: 1.5rem; }
+h1 { font-size: 20px; font-weight: 500; margin-bottom: 0.4rem; }
+p.sub { font-size: 14px; color: #aaa; margin-bottom: 1rem; line-height: 1.6; max-width: 700px; }
+#round-label { font-size: 13px; color: #888; text-align: center; margin-bottom: 0.5rem; }
+#track-wrap { width: 100%; max-width: 720px; border-radius: 12px; border: 1px solid #333; overflow: hidden; background: #1a1a2e; cursor: none; touch-action: none; user-select: none; }
+canvas#track { display: block; width: 100%; }
+#stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin: 1rem 0; max-width: 720px; }
+.stat { background: #1e1e1e; border-radius: 8px; padding: 0.7rem 1rem; border: 1px solid #333; }
+.stat-label { font-size: 12px; color: #888; margin-bottom: 4px; }
+.stat-value { font-size: 22px; font-weight: 500; }
+#chart-wrap { background: #1e1e1e; border: 1px solid #333; border-radius: 12px; padding: 1rem; margin-bottom: 1rem; max-width: 720px; }
+canvas#lc { display: block; width: 100%; height: 140px; }
+#settings { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; max-width: 720px; margin-bottom: 0.75rem; }
+.setting-row { display: flex; align-items: center; gap: 8px; background: #1e1e1e; border: 1px solid #333; border-radius: 8px; padding: 0.6rem 0.8rem; }
+.setting-row label { font-size: 12px; color: #aaa; white-space: nowrap; flex: 1; }
+.setting-row input[type=range] { width: 80px; }
+.setting-val { font-size: 13px; font-weight: 500; color: #378ADD; min-width: 24px; text-align: right; }
+#controls { display: flex; gap: 8px; max-width: 720px; margin-bottom: 0.75rem; }
+button { flex: 1; padding: 10px 16px; border-radius: 8px; border: 1px solid #555; background: #222; color: #eee; font-size: 14px; cursor: pointer; }
+button:hover { background: #333; }
+#reset-btn { max-width: 200px; }
+#msg { font-size: 13px; color: #888; text-align: center; min-height: 20px; }
+</style>
+</head>
+<body>
+<h1>Track-Experiment</h1>
+<p class="sub">Der Punkt fährt automatisch von links nach rechts. Steuere ihn relativ mit der Maus hoch und runter – bleibe auf den Plattformen.</p>
+<div id="round-label">Serie — / —  |  Versuch — / —</div>
+<div id="track-wrap"><canvas id="track"></canvas></div>
+<div id="stats">
+  <div class="stat"><div class="stat-label">Zeit auf Pfad</div><div class="stat-value" id="s-time">—</div></div>
+  <div class="stat"><div class="stat-label">Versuch / Serie</div><div class="stat-value" id="s-round">— / —</div></div>
+</div>
+<div id="chart-wrap"><canvas id="lc"></canvas></div>
+<div id="settings">
+  <div class="setting-row"><label>Geschwindigkeit (Level)</label><input type="range" id="speed-slider" min="1" max="5" step="1" value="2"><span class="setting-val" id="speed-val">2</span></div>
+  <div class="setting-row"><label>Wiederholungen pro Serie</label><input type="range" id="reps-slider" min="2" max="10" step="1" value="5"><span class="setting-val" id="reps-val">5</span></div>
+  <div class="setting-row"><label>Anzahl Serien</label><input type="range" id="series-slider" min="1" max="5" step="1" value="2"><span class="setting-val" id="series-val">2</span></div>
+  <div class="setting-row"><label>Pause zwischen Versuchen (s)</label><input type="range" id="delay-slider" min="1" max="5" step="1" value="3"><span class="setting-val" id="delay-val">3</span></div>
+  <div class="setting-row"><label>Serienpause (s)</label><input type="range" id="series-delay-slider" min="5" max="60" step="5" value="30"><span class="setting-val" id="series-delay-val">30</span></div>
+  <div class="setting-row" style="grid-column: 1/-1;">
+    <label>Steuerung</label>
+    <div style="display:flex;gap:8px;flex:1;">
+      <button id="btn-mouse" onclick="setMode('mouse')" style="flex:1;padding:6px;font-size:13px;border-color:#378ADD;color:#378ADD;background:#1a2a3a;">Maus / Trackpad</button>
+      <button id="btn-touch" onclick="setMode('touch')" style="flex:1;padding:6px;font-size:13px;">Touchscreen</button>
+    </div>
+  </div>
+</div>
+<div id="controls">
+  <button id="reset-btn" onclick="resetExp()">Zurücksetzen</button>
+</div>
+<div id="msg">Klicke auf den Spielbereich oder drücke Leertaste um zu starten.</div>
+
+<script>
+const CW=720, CH=300;
+const H=20;
+
+const PLATFORMS=[
+  [0,   130, 160],
+  [130, 240, 40],
+  [240, 340, 260],
+  [340, 440, 190],
+  [440, 530, 30],
+  [530, 640, 220],
+  [640, 730, 170],
+  [730, 840, 280],
+  [840, 940, 110],
+  [940, 1040,80],
+];
+const PATH_END=1040;
+
+// Settings
+function REPS(){ return parseInt(document.getElementById('reps-slider').value); }
+function SERIES(){ return parseInt(document.getElementById('series-slider').value); }
+function SPEED(){ return parseInt(document.getElementById('speed-slider').value)*0.13; }
+function DELAY(){ return parseInt(document.getElementById('delay-slider').value); }
+function SERIES_DELAY(){ return parseInt(document.getElementById('series-delay-slider').value); }
+
+[['speed-slider','speed-val'],['reps-slider','reps-val'],['series-slider','series-val'],
+ ['delay-slider','delay-val'],['series-delay-slider','series-delay-val']].forEach(([id,vid])=>{
+  document.getElementById(id).addEventListener('input',e=>{
+    document.getElementById(vid).textContent=e.target.value;
+  });
+});
+
+let cv, ctx, state='idle';
+let controlMode='mouse'; // 'mouse' or 'touch'
+let currentSeries=0, currentRep=0;
+let allScores=[], seriesScores=[];
+let animId=null, countdownId=null;
+let mouseY=CH/2, mouseAbsY=0, dotX=0;
+let onTrackFrames=0, totalFrames=0, lastTs=null, finished=false;
+let trail=[], lastScore=0;
+
+function isOnPlatform(x,y){
+  for(const p of PLATFORMS) if(x>=p[0]&&x<=p[1]&&Math.abs(y-p[2])<=H) return true;
+  return false;
+}
+function sx(x){ return x*CW/PATH_END; }
+
+function init(){
+  cv=document.getElementById('track');
+  cv.width=CW; cv.height=CH;
+  ctx=cv.getContext('2d');
+  mouseY=PLATFORMS[0][2];
+  drawScene(0,mouseY,false,'start');
+  drawChart();
+}
+
+function drawPlatforms(){
+  PLATFORMS.forEach((p,i)=>{
+    const x0=sx(p[0]),x1=sx(p[1]),yc=p[2];
+    ctx.fillStyle='#2a2a5a'; ctx.strokeStyle='#5555aa'; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.rect(x0,yc-H,x1-x0,H*2); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle='#4444aa'; ctx.lineWidth=1; ctx.setLineDash([5,6]);
+    ctx.beginPath(); ctx.moveTo(x0,yc); ctx.lineTo(x1,yc); ctx.stroke();
+    ctx.setLineDash([]);
+    if(i<PLATFORMS.length-1){
+      const next=PLATFORMS[i+1];
+      const gx=(sx(p[1])+sx(next[0]))/2;
+      const dy=next[2]-p[2];
+      ctx.fillStyle='#666'; ctx.font='13px sans-serif';
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText(dy<0?'↑':dy>0?'↓':'→',gx,(p[2]+next[2])/2);
+    }
+  });
+  const s=PLATFORMS[0];
+  ctx.fillStyle='#1D9E75'; ctx.beginPath(); ctx.arc(sx(s[0])+10,s[2],9,0,2*Math.PI); ctx.fill();
+  ctx.fillStyle='white'; ctx.font='bold 9px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('S',sx(s[0])+10,s[2]);
+  const e=PLATFORMS[PLATFORMS.length-1];
+  ctx.fillStyle='#E24B4A'; ctx.beginPath(); ctx.arc(sx(e[1])-10,e[2],9,0,2*Math.PI); ctx.fill();
+  ctx.fillStyle='white'; ctx.fillText('Z',sx(e[1])-10,e[2]);
+}
+
+function drawScene(dx,dy,on,overlay,countdownN,feedbackPct,isSeriesPause){
+  ctx.clearRect(0,0,CW,CH);
+  ctx.fillStyle='#1a1a2e'; ctx.fillRect(0,0,CW,CH);
+  drawPlatforms();
+
+  ctx.beginPath();
+  ctx.fillStyle=on?'#378ADD':'#E24B4A';
+  ctx.arc(sx(dx),dy,7,0,2*Math.PI); ctx.fill();
+  ctx.strokeStyle='white'; ctx.lineWidth=1.2;
+  ctx.beginPath(); ctx.arc(sx(dx),dy,7,0,2*Math.PI); ctx.stroke();
+
+  if(overlay==='start'){
+    ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(0,0,CW,CH);
+    ctx.fillStyle='white'; ctx.font='bold 15px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText('Klicken oder Leertaste → Start',CW/2,CH/2);
+  }
+
+  if(overlay==='countdown'&&countdownN!==undefined){
+    ctx.fillStyle='rgba(0,0,0,0.45)'; ctx.fillRect(0,0,CW,CH);
+    ctx.fillStyle='white'; ctx.font='bold 36px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(countdownN,CW/2,CH/2-20);
+    ctx.font='14px sans-serif'; ctx.fillStyle='#bbb';
+    ctx.fillText(isSeriesPause?'Serienpause – gleich weiter...':'Nächster Versuch startet...',CW/2,CH/2+20);
+  }
+
+  if(overlay==='feedback'&&feedbackPct!==undefined){
+    if(trail.length>1){
+      ctx.beginPath(); ctx.strokeStyle='rgba(255,200,50,0.75)'; ctx.lineWidth=2;
+      trail.forEach((pt,i)=>{ i===0?ctx.moveTo(sx(pt[0]),pt[1]):ctx.lineTo(sx(pt[0]),pt[1]); });
+      ctx.stroke();
+    }
+    ctx.fillStyle='rgba(0,0,0,0.62)'; ctx.beginPath();
+    ctx.roundRect(CW/2-130,CH/2-38,260,76,10); ctx.fill();
+    ctx.strokeStyle='#5555aa'; ctx.lineWidth=1; ctx.beginPath();
+    ctx.roundRect(CW/2-130,CH/2-38,260,76,10); ctx.stroke();
+    ctx.fillStyle='white'; ctx.font='bold 26px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(feedbackPct+'% auf Pfad',CW/2,CH/2-8);
+    ctx.font='12px sans-serif'; ctx.fillStyle='#aaa';
+    ctx.fillText('Serie '+currentSeries+' | Versuch '+currentRep,CW/2,CH/2+20);
+  }
+}
+
+function loop(ts){
+  if(state!=='running'||finished) return;
+  if(lastTs===null) lastTs=ts;
+  const dt=ts-lastTs; lastTs=ts;
+  dotX+=SPEED()*dt;
+  if(dotX>=PATH_END-10){ dotX=PATH_END-10; finishRound(); return; }
+  totalFrames++;
+  const on=isOnPlatform(dotX,mouseY);
+  if(on) onTrackFrames++;
+  trail.push([dotX,mouseY]);
+  drawScene(dotX,mouseY,on,null);
+  animId=requestAnimationFrame(loop);
+}
+
+function updateLabel(){
+  document.getElementById('round-label').textContent=
+    'Serie '+currentSeries+' / '+SERIES()+'  |  Versuch '+currentRep+' / '+REPS();
+  document.getElementById('s-round').textContent=currentRep+' / '+SERIES();
+}
+
+function finishRound(){
+  finished=true; cancelAnimationFrame(animId);
+  const pct=totalFrames>0?Math.round(onTrackFrames/totalFrames*100):0;
+  lastScore=pct;
+  allScores.push(pct); seriesScores.push(pct);
+  document.getElementById('s-time').textContent=pct+'%';
+  drawChart();
+
+  // 2s feedback
+  drawScene(dotX,mouseY,false,'feedback',null,pct);
+  setTimeout(()=>{
+    const repsDone=currentRep>=REPS();
+    const seriesDone=repsDone&&currentSeries>=SERIES();
+    if(seriesDone){
+      state='done';
+      drawScene(PATH_END-10,mouseY,false,null);
+      document.getElementById('msg').textContent='Experiment abgeschlossen! Siehst du eine Lernkurve?';
+      document.getElementById('round-label').textContent='Fertig';
+    } else if(repsDone){
+      // Serienpause
+      seriesScores=[];
+      startCountdown(true);
+    } else {
+      startCountdown(false);
+    }
+  },2000);
+}
+
+function startCountdown(isSeriesPause){
+  state='countdown';
+  const total=isSeriesPause?SERIES_DELAY():DELAY();
+  let remaining=total;
+  document.getElementById('msg').textContent=(isSeriesPause?'Serienpause':'Nächster Versuch')+' in '+remaining+' Sek.';
+  drawScene(PATH_END-10,mouseY,false,'countdown',remaining,null,isSeriesPause);
+  countdownId=setInterval(()=>{
+    remaining--;
+    if(remaining<=0){
+      clearInterval(countdownId);
+      triggerStart();
+    } else {
+      drawScene(PATH_END-10,mouseY,false,'countdown',remaining,null,isSeriesPause);
+      document.getElementById('msg').textContent=(isSeriesPause?'Serienpause':'Nächster Versuch')+' in '+remaining+' Sek.';
+    }
+  },1000);
+}
+
+function triggerStart(){
+  if(state==='done') return;
+  if(state==='countdown') clearInterval(countdownId);
+  if(state==='idle'||state==='ready'||state==='countdown'){
+    // advance counters
+    if(state==='idle'){ currentSeries=1; currentRep=1; }
+    else {
+      currentRep++;
+      if(currentRep>REPS()){ currentSeries++; currentRep=1; }
+    }
+    cancelAnimationFrame(animId);
+    finished=false; dotX=0; onTrackFrames=0; totalFrames=0;
+    lastTs=null; trail=[];
+    mouseY=PLATFORMS[0][2];
+    updateLabel();
+    document.getElementById('msg').textContent='Steuere den Punkt mit der Maus/Finger!';
+    state='running';
+    animId=requestAnimationFrame(loop);
+  }
+}
+
+function drawChart(){
+  const lc=document.getElementById('lc');
+  lc.width=lc.parentElement.clientWidth-32; lc.height=140;
+  const c=lc.getContext('2d'),w=lc.width,h=lc.height,pad=32;
+  c.clearRect(0,0,w,h); c.fillStyle='#1e1e1e'; c.fillRect(0,0,w,h);
+  if(!allScores.length){
+    c.fillStyle='#555'; c.font='13px sans-serif'; c.textAlign='center'; c.textBaseline='middle';
+    c.fillText('Lernkurve erscheint nach dem ersten Versuch',w/2,h/2); return;
+  }
+  const total=SERIES()*REPS();
+  const minV=Math.max(0,Math.min(...allScores)-10),maxV=Math.min(100,Math.max(...allScores)+10);
+  const xs=i=>pad+i*(w-2*pad)/Math.max(total-1,1);
+  const ys=v=>pad+(1-(v-minV)/(maxV-minV))*(h-2*pad);
+  // series dividers
+  for(let s=1;s<SERIES();s++){
+    const xi=xs(s*REPS()-1);
+    c.beginPath(); c.strokeStyle='#554'; c.lineWidth=1; c.setLineDash([4,4]);
+    c.moveTo(xi,pad); c.lineTo(xi,h-pad); c.stroke(); c.setLineDash([]);
+    c.fillStyle='#664'; c.font='10px sans-serif'; c.textAlign='center';
+    c.fillText('Serie '+s,xi,pad-4);
+  }
+  // x labels
+  allScores.forEach((_,i)=>{
+    c.fillStyle='#888'; c.font='10px sans-serif'; c.textAlign='center';
+    c.fillText(i+1,xs(i),h-6);
+  });
+  // line
+  c.beginPath(); c.strokeStyle='#1D9E75'; c.lineWidth=2;
+  allScores.forEach((v,i)=>i===0?c.moveTo(xs(i),ys(v)):c.lineTo(xs(i),ys(v)));
+  c.stroke();
+  allScores.forEach((v,i)=>{
+    c.beginPath(); c.fillStyle='#1D9E75';
+    c.arc(xs(i),ys(v),4,0,2*Math.PI); c.fill();
+    c.fillStyle='#ccc'; c.font='10px sans-serif'; c.textAlign='center';
+    c.fillText(v+'%',xs(i),ys(v)-10);
+  });
+}
+
+function setMode(mode){
+  controlMode=mode;
+  document.getElementById('btn-mouse').style.borderColor=mode==='mouse'?'#378ADD':'#555';
+  document.getElementById('btn-mouse').style.color=mode==='mouse'?'#378ADD':'#eee';
+  document.getElementById('btn-mouse').style.background=mode==='mouse'?'#1a2a3a':'#222';
+  document.getElementById('btn-touch').style.borderColor=mode==='touch'?'#378ADD':'#555';
+  document.getElementById('btn-touch').style.color=mode==='touch'?'#378ADD':'#eee';
+  document.getElementById('btn-touch').style.background=mode==='touch'?'#1a2a3a':'#222';
+}
+
+function onMouseMove(e){
+  const dy=e.clientY-mouseAbsY;
+  mouseAbsY=e.clientY;
+  if(state==='running'&&controlMode==='mouse'){ mouseY=Math.max(5,Math.min(CH-5,mouseY+dy)); }
+}
+function onTouchMove(e){
+  e.preventDefault();
+  if(controlMode==='touch'){
+    // absolute: map finger Y to canvas Y
+    const r=cv.getBoundingClientRect();
+    const absY=(e.touches[0].clientY-r.top)*CH/r.height;
+    if(state==='running') mouseY=Math.max(5,Math.min(CH-5,absY));
+  } else {
+    const dy=e.touches[0].clientY-mouseAbsY;
+    mouseAbsY=e.touches[0].clientY;
+    if(state==='running'){ mouseY=Math.max(5,Math.min(CH-5,mouseY+dy)); }
+  }
+}
+
+function resetExp(){
+  clearInterval(countdownId); cancelAnimationFrame(animId);
+  state='idle'; currentSeries=0; currentRep=0; finished=false;
+  dotX=0; mouseY=PLATFORMS[0][2]; allScores=[]; seriesScores=[];
+  onTrackFrames=0; totalFrames=0; lastTs=null; trail=[];
+  document.getElementById('s-time').textContent='—';
+  document.getElementById('s-round').textContent='— / —';
+  document.getElementById('round-label').textContent='Serie — / —  |  Versuch — / —';
+  document.getElementById('msg').textContent='Klicke auf den Spielbereich oder drücke Leertaste um zu starten.';
+  drawScene(0,PLATFORMS[0][2],false,'start'); drawChart();
+}
+
+window.addEventListener('load',init);
+window.addEventListener('mousemove',onMouseMove);
+window.addEventListener('keydown',e=>{ if(e.code==='Space'){ e.preventDefault(); triggerStart(); }});
+const wrap=document.getElementById('track-wrap');
+wrap.addEventListener('click',triggerStart);
+wrap.addEventListener('touchstart',e=>{ e.preventDefault(); mouseAbsY=e.touches[0].clientY; triggerStart(); },{passive:false});
+wrap.addEventListener('touchmove',onTouchMove,{passive:false});
+</script>
+</body>
+</html>
